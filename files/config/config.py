@@ -42,7 +42,7 @@ alpha=1.0
 # Training
 batchsize=150
 train_init_lr=0.001
-train_epochs=85
+train_epochs=20
 train_target_acc=1.0
 train_output_ckpt='/float_model/f_model.h5'
 
