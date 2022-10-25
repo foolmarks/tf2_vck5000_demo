@@ -42,19 +42,18 @@ alpha=1.0
 # Training
 batchsize=150
 train_init_lr=0.001
-train_epochs=20
-train_target_acc=1.0
+train_epochs=85
 train_output_ckpt='/float_model/f_model.h5'
 
 # Quantization
 quant_output_ckpt='/quant_model/q_model.h5'
 
 # Compile
-compile_dir='/compiled_model_'
+compile_dir='/compiled_models'
 model_name='mobilenetv2'
 
 # Target
-target_dir='/target_'
+target_dir='/target'
 
 # Application code
 app_dir='application'
