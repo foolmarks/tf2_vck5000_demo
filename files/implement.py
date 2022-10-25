@@ -38,57 +38,26 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.models import load_model
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
 
-
-try:
-  from tf_nndct.optimization import IterativePruningRunner
-except:
-  print('tf_nndct.optimization not found')
-
-try:
-  from tensorflow_model_optimization.quantization.keras import vitis_quantize
-except:
-  print('tensorflow_model_optimization.quantization.keras not found')
+# Vitis-Ai quantizer
+from tensorflow_model_optimization.quantization.keras import vitis_quantize
 
 from build_mobilenetv2 import build_mobilenetv2
 from dataset_utils import input_fn_train, input_fn_test
 
 
 # configuration
-train_target_acc = cfg.train_target_acc
 train_init_lr = cfg.train_init_lr
 train_epochs = cfg.train_epochs
 tfrec_dir = cfg.tfrec_dir
 batchsize=cfg.batchsize
 input_shape=cfg.input_shape
 model_name=cfg.model_name
-
-init_prune_ratio=cfg.init_prune_ratio
-incr_prune_ratio=cfg.incr_prune_ratio
-prune_steps=cfg.prune_steps
-finetune_init_lr=cfg.finetune_init_lr
-
-
-
-
 DIVIDER=cfg.DIVIDER
 
 
-class EarlyStoponAcc(tf.keras.callbacks.Callback):
-  '''
-  Early stop on reaching target accuracy 
-  '''
-  def __init__(self, target_acc):
-    super(EarlyStoponAcc, self).__init__()
-    self.target_acc=target_acc
+ 
 
-  def on_epoch_end(self, epoch, logs=None):
-    accuracy=logs['val_accuracy']
-    if accuracy >= self.target_acc:
-      self.model.stop_training=True
-      print('Reached target accuracy of',self.target_acc,'..exiting.')
-  
-
-def train(model,output_ckpt,learnrate,train_dataset,test_dataset,epochs,batchsize,target_acc):
+def train(model,output_ckpt,learnrate,train_dataset,test_dataset,epochs,batchsize):
 
   def step_decay(epoch):
     '''
@@ -113,12 +82,11 @@ def train(model,output_ckpt,learnrate,train_dataset,test_dataset,epochs,batchsiz
                                save_best_only=True,
                                save_weights_only=True)
 
-  early_stop_call = EarlyStoponAcc(target_acc)
-
   lr_scheduler_call = LearningRateScheduler(schedule=step_decay,
                                             verbose=1)
 
-  callbacks_list = [chkpt_call, early_stop_call, lr_scheduler_call]
+  callbacks_list = [chkpt_call, lr_scheduler_call]
+  
 
   '''
   Compile model
@@ -159,33 +127,16 @@ def evaluate(model,test_dataset):
   return scores
 
 
-def ana_eval(model, test_dataset):
-  return evaluate(model, test_dataset)[0]
-
-
-def prune(model, ratio, test_dataset):
-  '''
-  Prune the model
-  '''
-  input_spec = tf.TensorSpec((1, *input_shape), tf.float32)
-  runner = IterativePruningRunner(model, input_spec)
-  import functools
-  eval_fn = functools.partial(ana_eval, test_dataset=test_dataset)
-  runner.ana(eval_fn)
-  return runner.prune(ratio)
-
 
 def implement(build_dir, mode, target):
   '''
-  Implements training, pruning and transform modes
+  Implements training, quantization and compiling
   '''
 
   # output checkpoints and folders for each mode
   train_output_ckpt = build_dir + cfg.train_output_ckpt
-  prune_output_ckpt = build_dir + cfg.prune_output_ckpt
-  transform_output_ckpt = build_dir + cfg.transform_output_ckpt
   quant_output_ckpt = build_dir + cfg.quant_output_ckpt
-  compile_output_dir = build_dir+cfg.compile_dir+target
+  compile_output_dir = build_dir+cfg.compile_dir
 
 
   '''
@@ -204,88 +155,21 @@ def implement(build_dir, mode, target):
     os.makedirs(os.path.dirname(train_output_ckpt), exist_ok=True)
 
     # run initial training
-    train(model,train_output_ckpt,train_init_lr,train_dataset,test_dataset,train_epochs,batchsize,train_target_acc)
+    train(model,train_output_ckpt,train_init_lr,train_dataset,test_dataset,train_epochs,batchsize)
 
     # eval trained checkpoint
     model = build_mobilenetv2(weights=train_output_ckpt, input_shape=input_shape)
     scores = evaluate(model,test_dataset)
     print('Trained model accuracy: {0:.4f}'.format(scores[1]*100),'%')
 
-    # save final accuracy to a text file for use in pruning
-    f = open(build_dir+'/trained_accuracy.txt', 'w')
-    f.write(str(scores[1]))
-    f.close()
-
-  elif (mode=='prune'):
-
-    # build mobilenet with weights from initial training
-    model = build_mobilenetv2(weights=train_output_ckpt,input_shape=input_shape)
-
-    prune_ratio=init_prune_ratio
-
-    # fetch the required final accuracy
-    f = open(build_dir+'/trained_accuracy.txt', 'r')
-    final_ft_acc = float(f.readline())
-    f.close()
-
-    for i in range(1,prune_steps+1):
-
-      print(DIVIDER)
-      print('Pruning iteration',i,'of',prune_steps,' Pruning ratio:',prune_ratio)
-
-      if (i==prune_steps):
-        finetune_target_acc=final_ft_acc
-      else:
-        finetune_target_acc=final_ft_acc*0.97
-
-      print('Target accuracy for this iteration:',finetune_target_acc)
-
-      # prune model
-      pruned_model = prune(model,prune_ratio,test_dataset)
-
-      # fine-tune pruned model
-      train(pruned_model,prune_output_ckpt,finetune_init_lr,train_dataset,test_dataset,train_epochs,batchsize,finetune_target_acc)
-
-      # increment the pruning ratio for the next iteration
-      prune_ratio+=incr_prune_ratio
-
-
-    # eval best fine-tuned checkpoint
-    model = build_mobilenetv2(weights=prune_output_ckpt, input_shape=input_shape)
-    scores = evaluate(model,test_dataset)
-    print('Pruned model accuracy: {0:.4f}'.format(scores[1]*100),'%')
-
-  elif (mode=='transform'):
-
-    # build mobilenet with weights from last pruning iteration
-    model = build_mobilenetv2(weights=prune_output_ckpt,input_shape=input_shape)
-
-    # make and save slim model
-    input_spec = tf.TensorSpec((1, *input_shape), tf.float32)
-    runner = IterativePruningRunner(model, input_spec) 
-    slim_model = runner.get_slim_model()
-    os.makedirs(os.path.dirname(transform_output_ckpt), exist_ok=True)
-    slim_model.save(transform_output_ckpt)
-
-    # eval slim model
-    scores = evaluate(slim_model,test_dataset)
-    print('Slim model accuracy: {0:.4f}'.format(scores[1]*100),'%')
 
   elif (mode=='quantize'):
 
     # make folder for saving quantized model
     os.makedirs(os.path.dirname(quant_output_ckpt), exist_ok=True)
 
-    # load the transformed model if it exists
-    # otherwise, load the trained model
-    if (os.path.exists(transform_output_ckpt)):
-      print('Loading transformed model..')
-      float_model = load_model(transform_output_ckpt,compile=False)
-    else:
-      input_ckpt = train_output_ckpt
-      print('Did not find transformed model, loading trained model..')
-      # build mobilenet with weights
-      float_model = build_mobilenetv2(weights=input_ckpt,input_shape=input_shape)
+    # load the trained model
+    float_model = build_mobilenetv2(weights=train_output_ckpt,input_shape=input_shape)
 
     # run quantization with fast fine-tune
     quantizer = vitis_quantize.VitisQuantizer(float_model)
@@ -311,39 +195,33 @@ def implement(build_dir, mode, target):
     print('Quantized model accuracy: {0:.4f}'.format(scores[1]*100),'%')
     print('\n'+DIVIDER)
 
+
   elif (mode=='compile'):
 
     # set the arch value for the compiler script
     arch_dict = {
-      'zcu102': 'DPUCZDX8G/ZCU102',
-      'zcu104': 'DPUCZDX8G/ZCU104',
-      'kv260': 'DPUCZDX8G/KV260',
-      'u200': 'DPUCADF8H/U200',
-      'u250': 'DPUCADF8H/U250',
-      'u50': 'DPUCAHX8H/U50',
-      'u50lv': 'DPUCAHX8H/U50LV',
-      'u50lv-dwc': 'DPUCAHX8H/U50LV-DWC',
-      'u55c': 'DPUCAHX8H/U55C-DWC',    
-      'u280': 'DPUCAHX8L/U280',
-      'vck190': 'DPUCVDX8G/VCK190',
+      'vck5000-4pe-miscdwc': 'DPUCVDX8H/VCK50004PE',
       'vck5000-6pedwc': 'DPUCVDX8H/VCK50006PEDWC',
+      'vck5000-6pemisc': 'DPUCVDX8H/VCK50006PEMISC',
       'vck5000-8pe': 'DPUCVDX8H/VCK50008PE'
     }
 
     arch='/opt/vitis_ai/compiler/arch/'+arch_dict[target.lower()]+'/arch.json'
+    print(' Compiling for',arch)
   
-    # path to TF2 compiler script (valid for Vitis-AI 2.0)
+    # path to TF2 compiler script (valid for Vitis-AI 2.5)
     compiler_path = '/opt/vitis_ai/conda/envs/vitis-ai-tensorflow2/lib/python3.7/site-packages/vaic/vai_c_tensorflow2.py'
 
     # arguments for compiler script
-    cmd_args = ' --model ' + quant_output_ckpt + ' --output_dir ' + compile_output_dir + ' --arch ' + arch + ' --net_name ' + model_name
+    cmd_args = ' --model ' + quant_output_ckpt + ' --output_dir ' + compile_output_dir + ' --arch ' + arch + ' --net_name ' + model_name+'_'+target
+    print('Compiler command:',cmd_args)
 
     # run compiler python script
     os.system(compiler_path + cmd_args)
 
 
   else:
-    print('INVALID MODE - valid modes are train, prune, transform, quantize, compile')
+    print('INVALID MODE - valid modes are train, quantize, compile')
 
 
   return
@@ -355,8 +233,8 @@ def run_main():
   # construct the argument parser and parse the arguments
   ap = argparse.ArgumentParser()
   ap.add_argument('-bd', '--build_dir', type=str, default='build', help='Path of build folder. Default is build')
-  ap.add_argument('-m',  '--mode',      type=str, default='train', choices=['train','prune','transform','quantize','compile'], help='Mode: train,prune,transform,quantize,compile. Default is train')
-  ap.add_argument('-t' , '--target',    type=str, default='zcu102',help='Target platform. Default is zcu102')
+  ap.add_argument('-m',  '--mode',      type=str, default='train',        choices=['train','quantize','compile'], help='Mode: train,quantize,compile. Default is train')
+  ap.add_argument('-t' , '--target',    type=str, default='vck5000-4pe',  choices=['vck5000-4pe-miscdwc','vck5000-6pedwc','vck5000-6pemisc','vck5000-8pe'], help='Target platform. Default is vck5000-4pe')
   args = ap.parse_args()
 
   print('\n'+DIVIDER)

@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Author: Mark Harvey, Xilinx Inc
+# Author: Mark Harvey
 
 
-# Build script for baseline (non-pruning) flow
+# Build script
 
 
 # enable TensorFlow2 environment
@@ -29,7 +29,7 @@ echo " STEP #0: SET UP ENVIRONMENT VARIABLES"
 echo "-----------------------------------------"
 
 # make build folder
-export BUILD=./build_np
+export BUILD=./build
 export LOG=${BUILD}/logs
 mkdir -p ${LOG}
 
@@ -58,7 +58,7 @@ echo "-----------------------------------------"
 echo " STEP #4: COMPILE FOR TARGET"
 echo "-----------------------------------------"
 # modify the list of targets as required
-for targetname in zcu102 zcu104 kv260 u280 vck190; do
+for targetname in vck5000-4pe-miscdwc vck5000-6pedwc; do
   python -u implement.py --mode compile --build_dir ${BUILD} --target ${targetname} 2>&1 | tee ${LOG}/compile_${targetname}.log
 done
 
@@ -66,12 +66,10 @@ done
 echo "-----------------------------------------"
 echo " STEP #5: MAKE TARGET FOLDER"
 echo "-----------------------------------------"
-# modify the list of targets as required
-for targetname in zcu102 zcu104 kv260 u280 vck190; do
-  python -u target.py --build_dir  ${BUILD} --target ${targetname} 2>&1 | tee ${LOG}/target_${targetname}.log
-done
+python -u target.py --build_dir  ${BUILD} 2>&1 | tee ${LOG}/target.log
+
 
 echo "-----------------------------------------"
-echo "BASELINE FLOW COMPLETED.."
+echo " FLOW COMPLETED.."
 echo "-----------------------------------------"
 

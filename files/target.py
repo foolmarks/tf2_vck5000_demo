@@ -50,10 +50,9 @@ def make_target(build_dir,target):
 
   # configuration
   tfrec_dir=cfg.tfrec_dir
-  input_dir=build_dir+cfg.compile_dir+target
-  output_dir = build_dir+cfg.target_dir+target
+  input_dir=build_dir+cfg.compile_dir
+  output_dir = build_dir+cfg.target_dir
   model_name=cfg.model_name
-  model_path = input_dir+'/'+model_name+'.xmodel'
   app_dir=cfg.app_dir
 
   # remove any previous data
@@ -88,23 +87,43 @@ def make_target(build_dir,target):
 
 
   # copy application code
-  print('Copying application code from',app_dir,'...')
-  shutil.copy(os.path.join(app_dir, 'app_mt.py'), output_dir)
+  print('Copying application code from',app_dir,'...') 
+  for file_name in os.listdir(app_dir):
+    source = app_dir+'/'+file_name
+    destination = output_dir+'/'+file_name
+    shutil.copy(source, destination)
+    print(' copied', file_name)
 
-  # copy compiled model
-  print('Copying compiled model from',model_path,'...')
-  shutil.copy(model_path, output_dir)
+  # copy compiled models
+  print('Copying compiled models from',input_dir,'...')
+  for file_name in os.listdir(input_dir):
+    source = input_dir+'/'+file_name
+    destination = output_dir+'/'+file_name
+    shutil.copy(source, destination)
+    print(' copied', file_name)
 
+  # copy VCK5000 setup and board run files
+  print('Copying VCK5000 set up shell script to target folder...')
+  shutil.copy('setup.sh', output_dir)
+  print('Copying board run shell script to target folder...')
+  shutil.copy('board_run.sh', output_dir)
+
+  # copy CPU docker launch script
+  print('Copying docker launch shell script to target folder...')
+  shutil.copy('docker_run.sh', output_dir)
+  shutil.copy('PROMPT.txt', output_dir)
+  
+  
   return
 
 
 
 def main():
 
-   # construct the argument parser and parse the arguments
+  # construct the argument parser and parse the arguments
   ap = argparse.ArgumentParser()
   ap.add_argument('-bd', '--build_dir', type=str, default='build', help='Path of build folder. Default is build')
-  ap.add_argument('-t' , '--target',    type=str, default='zcu102',help='Target platform. Default is zcu102')
+  ap.add_argument('-t' , '--target',    type=str, default='vck5000-4pe',  choices=['vck5000-4pe','vck5000-6pedwc','vck5000-6pemisc','vck5000-8pe'], help='Target platform. Default is vck5000-4pe')
   args = ap.parse_args()  
 
   print('\n'+DIVIDER)
